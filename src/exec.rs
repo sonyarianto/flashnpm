@@ -1,5 +1,5 @@
 //! `flashnpm exec` lookups: which installed bin a command means, which bin a
-//! package runs, and where a package installs. Port of `upm`'s `src/exec.ts`.
+//! package runs, and where a package installs.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

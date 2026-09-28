@@ -1,5 +1,5 @@
 //! The commands as functions: what `flashnpm <command>` does, without argv
-//! and without printing. Port of `upm`'s `src/api.ts` (MVP subset).
+//! and without printing.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

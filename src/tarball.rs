@@ -1,5 +1,4 @@
 //! Tarball dependencies: `file:` paths and `http(s)` URLs.
-//! Port of `upm`'s `src/tarball-deps.ts` + the `Tarball` half of `src/store.ts`.
 //!
 //! Identity is `name@<source>` where source is the URL as given or
 //! `file:` + the root-relative `/` path. Bytes are pinned by integrity in
@@ -213,7 +212,7 @@ pub async fn name_of(
     Ok(inner_manifest(&bytes, &source)?.name)
 }
 
-/// Rewrite a cwd-relative `file:` spec to manifest-relative (like upm's `fromCwd`).
+/// Rewrite a cwd-relative `file:` spec to manifest-relative.
 pub fn from_cwd(manifest_dir: &Path, cwd: &Path, fetch_spec: &str) -> String {
     let path = match fetch_spec.strip_prefix("file:") {
         Some(p) => p,

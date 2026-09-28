@@ -1,5 +1,4 @@
 //! Command-line parsing (`clap`) and output formatting.
-//! Mirrors `upm`'s `src/cli.ts` usage surface (MVP subset).
 
 use clap::{Parser, Subcommand};
 

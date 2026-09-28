@@ -1,12 +1,8 @@
-# flashnpm — Flash npm in idiomatic Rust
+# flashnpm
 
-A fast, tiny npm-registry package manager in pure idiomatic Rust,
-ported from the sibling [`upm`](https://github.com/unjs/upm) TypeScript project
-(`../upm`, ~14k LOC src, zero-dep Node).
-
-`upm` proves Node builtins are enough; `flashnpm` proves Rust's crates are better:
+A fast, tiny npm-registry package manager in pure idiomatic Rust with
 tokio concurrency, `reqwest` TLS, content-addressed store with hardlinks,
-and a `node_modules/.flashnpm` layout with no hoisting — same semantics, native speed.
+and a `node_modules/.flashnpm` layout with no hoisting.
 
 ## Status: 0.3 (parity pass + concurrent resolve)
 
@@ -26,7 +22,7 @@ Verified live against `registry.npmjs.org`:
   whole-tree install from the root, `run --workspaces` in dependency order
   (failures don't stop others, first code wins)
 - `flashnpm dedupe`: re-resolves preferring locked versions (lowest locked wins ties)
-- `flashnpm.lock` v1 (own file; reads/writes like `upm.lock` but separate),
+- `flashnpm.lock` v1 (own file format),
   lock stability (unrelated pins kept across re-resolves)
 - 1-day `min-release-age` default, `--before`, `--min-release-age-exclude`,
   `.npmrc` hierarchy + `npm_config_*`
@@ -38,7 +34,7 @@ Verified live against `registry.npmjs.org`:
   links only its direct deps, per-workspace `node_modules` + `.bin`, entry
   sweep on remove/replace, install-state fast path (`already up to date`)
 - `FLASHNPM_PROFILE=1`: `PHASE <label> <ms>` stderr marks for profiling installs
-- `bench/bench.sh`: cold/warm/repeat harness, flashnpm vs upm with private stores
+- `bench/bench.sh`: cold/warm/repeat harness with private stores
 
 Performance (profiled cold `express@^4`, 71 packages): resolve dominated at
 ~4.5s of 5.6s (sequential packument RTTs), so each frontier's packuments now
@@ -48,31 +44,31 @@ Lock output is deterministic under HashMap iteration order (root edges resolve
 per declared range; 15/15 repeat installs byte-stable) — verified after catching
 one nondeterministic root-edge bug with repeated runs.
 
-Known deviations from upm (documented, not accidental):
+Scope (documented, not accidental):
 
-- Registry lock edges keep their declared ranges (upm rewrites them to exact
-  versions); pins still hold via the `keep` map, and frozen installs verify.
+- Registry lock edges keep their declared ranges; pins still hold via
+  the `keep` map, and frozen installs verify.
 - No npm passthrough commands, foreign lockfiles, git/dir deps, lifecycle
   scripts, `storeBackend`, or `--verify` byte-hash audit (sizes/links/bins only).
-- Failed optional branches fail the resolve (upm drops them) — recorded future work.
+- Failed optional branches fail the resolve — recorded future work.
 
-## Layout (mirrors `upm/src/*.ts`)
+## Layout
 
-- `spec`, `semver` — spec parsing + npm range matching (`spec.ts`/`semver.ts`)
-- `integrity` — SSRI subset (`integrity.ts`)
-- `config` — `.npmrc` layers (`config.ts`)
-- `registry` — packument client + metadata cache (`registry.ts`)
-- `pick` — version selection + age gate (`pick.ts`)
-- `tarball` — `file:`/`https:` deps (`tarball-deps.ts` + `Tarball` store half)
-- `resolve` — flat walk, concurrent packument fetch, no hoisting (`resolve.ts`)
-- `lock` — `flashnpm.lock` round-trip (`lock.ts`)
-- `store` — fetch + unpack + index (`store.ts`, `unpack.ts`)
-- `link` — `.flashnpm` linker + isolation + sweep + `--verify` (`link.ts`)
-- `workspaces` — discovery + selection (`workspaces.ts`)
-- `run`, `exec` — script running + bin lookup (`run.ts`, `exec.ts`)
-- `state` — install-state fast path (`state.ts`)
-- `api` — commands as functions, no printing (`api.ts`)
-- `cli` — clap argv + output (`cli.ts`)
+- `spec`, `semver` — spec parsing + npm range matching
+- `integrity` — SSRI subset
+- `config` — `.npmrc` layers
+- `registry` — packument client + metadata cache
+- `pick` — version selection + age gate
+- `tarball` — `file:`/`https:` deps
+- `resolve` — flat walk, concurrent packument fetch, no hoisting
+- `lock` — `flashnpm.lock` round-trip
+- `store` — fetch + unpack + index
+- `link` — `.flashnpm` linker + isolation + sweep + `--verify`
+- `workspaces` — discovery + selection
+- `run`, `exec` — script running + bin lookup
+- `state` — install-state fast path
+- `api` — commands as functions, no printing
+- `cli` — clap argv + output
 
 ## Use
 
@@ -88,7 +84,7 @@ cargo test
 ./bench/bench.sh
 ```
 
-Design constraints inherited from `upm/.agents/design.md`: lockfiles travel
+Design constraints: lockfiles travel
 (all platforms kept until install), workspace is a leaf (never a store entry),
 tarball identity is its source, stability beats freshness (unrelated pins kept),
 cached state is evidence not authority, threads never change the answer.

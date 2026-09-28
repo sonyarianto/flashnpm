@@ -1,6 +1,6 @@
 //! `flashnpm run <script>`: one package.json script in a shell, with every
 //! `node_modules/.bin` above the project first on `PATH`.
-//! Port of `upm`'s `src/run.ts`. No pre/post scripts: what runs is named.
+//! No pre/post scripts: what runs is named.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

@@ -1,7 +1,6 @@
 //! Link resolved packages into `node_modules/.flashnpm` + parent links.
-//! Port of `upm`'s `src/link.ts` (MVP: no workspaces, no link workers).
 //!
-//! Layout mirrors upm: each `name@version` gets `node_modules/.flashnpm/<safe>/<files…>`,
+//! Layout: each `name@version` gets `node_modules/.flashnpm/<safe>/<files…>`,
 //! and `node_modules/<name>` symlinks to it. Bins link into `node_modules/.bin`.
 
 use std::collections::HashMap;
@@ -61,7 +60,7 @@ pub fn entry_dir(dot: &Path, pkg: &ResolvedPackage) -> std::path::PathBuf {
 ///
 /// Registry and tarball packages land in `node_modules/.flashnpm` with per-entry
 /// `node_modules` isolation; the root links only its direct deps (a missing
-/// dependency fails instead of working by accident, as in upm). Workspaces
+/// dependency fails instead of working by accident). Workspaces
 /// link by directory with their own dep links and `.bin`.
 pub async fn link_tree(
     project_dir: &Path,
@@ -482,7 +481,7 @@ async fn write_state_sentinel(project_dir: &Path) -> Result<(), FlashnpmError> {
 
 /// Audit the tree against the store without trusting install state: file
 /// sizes, package links and bins (not file hashes — same-size damage is out
-/// of scope, as in upm). Repairs what it can from the store and returns the
+/// of scope). Repairs what it can from the store and returns the
 /// number of repaired paths.
 pub async fn verify_tree(
     project_dir: &Path,

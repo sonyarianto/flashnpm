@@ -1,5 +1,4 @@
 //! Subset of SSRI: parse, hash and verify `<algorithm>-<base64>` strings.
-//! Port of `upm`'s `src/integrity.ts`.
 
 use crate::error::{FlashnpmError, ErrorCode};
 use base64::{engine::general_purpose::STANDARD as B64, Engine as _};

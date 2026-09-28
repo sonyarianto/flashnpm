@@ -1,6 +1,5 @@
 //! npm registry client: packuments with ETag revalidation and a
-//! content cache under `<store>/metadata`. Port of `upm`'s `src/registry.ts`
-//! (MVP: single-threaded `reqwest`, no worker pool yet).
+//! content cache under `<store>/metadata`.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -1,6 +1,6 @@
 //! Minimal npm semver: parse, compare and range matching.
 //!
-//! Port of `upm`'s `src/semver.ts`. Supports `^ ~ >= <= > < =`,
+//! Supports `^ ~ >= <= > < =`,
 //! hyphen ranges, `||`, `x/*` wildcards and prerelease gating.
 
 use std::cmp::Ordering;
@@ -27,7 +27,7 @@ fn parse_ids(s: &str) -> Vec<PrereleaseId> {
         .map(|p| {
             if p.chars().all(|c| c.is_ascii_digit()) {
                 // npm treats all-digit ids as numbers (leading zeros are still ids,
-                // but comparison stays numeric-vs-string as in upm).
+                // but comparison stays numeric-vs-string as in npm).
                 p.parse::<u64>()
                     .map_or_else(|_| PrereleaseId::Str(p.to_string()), PrereleaseId::Num)
             } else {

@@ -1,4 +1,4 @@
-//! `package.json` read/write helpers. Port of `upm`'s `src/package-json.ts`.
+//! `package.json` read/write helpers.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;

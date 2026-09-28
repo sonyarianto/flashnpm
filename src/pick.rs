@@ -1,6 +1,6 @@
-//! Pick the registry version a spec resolves to. Port of `upm`'s `src/pick.ts`.
+//! Pick the registry version a spec resolves to.
 //!
-//! Rules (same as upm):
+//! Rules:
 //! - exact versions win as written (no age gate on re-locked pins — caller decides);
 //! - tags fall back to the highest version at/below the tagged one that is old enough;
 //! - ranges fail when nothing old enough matches, naming the cutoff.

@@ -1,5 +1,4 @@
 //! Install-state cache: skip work when nothing changed.
-//! Port of `upm`'s `src/state.ts` (MVP: hash of lockfile + manifest + platform + flags).
 
 use std::path::Path;
 

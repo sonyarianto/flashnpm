@@ -1,5 +1,5 @@
 //! Replacement for `npm-package-arg`: version, range, tag, alias,
-//! workspace and tarball specs. Port of `upm`'s `src/spec.ts`.
+//! workspace and tarball specs.
 
 use crate::error::{FlashnpmError, ErrorCode};
 use crate::semver::{parse as parse_version, valid_range};

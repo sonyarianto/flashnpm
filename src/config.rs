@@ -1,5 +1,4 @@
 //! `.npmrc` loading: global < user < project < env < CLI flags.
-//! Port of `upm`'s `src/config.ts` (MVP: single-project, no workspaces).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -149,7 +148,7 @@ pub fn env_config(env: &HashMap<String, String>) -> HashMap<String, String> {
         out.insert(normalized, value.clone());
     }
     if !out.contains_key("registry") {
-        if let Some(r) = env.get("FLASHNPM_REGISTRY").or_else(|| env.get("UPM_REGISTRY")) {
+        if let Some(r) = env.get("FLASHNPM_REGISTRY") {
             if !r.is_empty() {
                 out.insert("registry".to_string(), r.clone());
             }

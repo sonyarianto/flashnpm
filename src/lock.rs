@@ -1,5 +1,4 @@
 //! Our own flat lockfile `flashnpm.lock`, keyed by identity (`name@version`).
-//! Port of `upm`'s `src/lock.ts` (MVP: no workspaces, no foreign locks).
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};

@@ -1,5 +1,4 @@
 //! Content-addressed store at `~/.flashnpm/store` (`files/`, `index/`, `metadata/`).
-//! Port of `upm`'s `src/store.ts` + `src/unpack.ts` (MVP: no workers, no backends).
 //!
 //! Layout:
 //! - `files/ab/cd/<base64url-sha512>` — raw file bytes, read-only
@@ -292,7 +291,7 @@ fn sanitize(name: &str) -> String {
 }
 
 /// Unpack `.tgz`/`.tar.gz`/`.tar` into `path -> (bytes, mode)`.
-/// Strips the leading `package/` prefix; rejects escapes (same as upm).
+/// Strips the leading `package/` prefix; rejects escapes.
 pub fn unpack_tarball(bytes: &[u8]) -> Result<Vec<(String, (Vec<u8>, u32))>, FlashnpmError> {
     // gzip first; an empty result falls back to plain tar.
     match read_archive(flate2::read::GzDecoder::new(bytes)) {

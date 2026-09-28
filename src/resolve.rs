@@ -1,6 +1,5 @@
 //! Walk a root `package.json` into a flat set of `name@version` packages.
-//! Port of `upm`'s `src/resolve.ts` (MVP: no workspaces, no peers folding beyond
-//! required-peer install, no hoisting — same as upm).
+//! No hoisting.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
@@ -516,7 +515,7 @@ fn edge_map(
             }
             None => {
                 // A bare range shadowed by a mismatched workspace goes to the
-                // registry; say so once (upm reports the mismatch).
+                // registry; say so once.
                 if by_name.contains_key(dep.as_str()) && crate::semver::valid_range(range) {
                     warnings.push(format!(
                         "{owner}: {dep}@{range} does not match workspace {}, using the registry",
@@ -581,7 +580,7 @@ fn insert_package(
         dependencies.insert(dep.clone(), range.clone());
         queue.push((dep.clone(), range.clone(), via_optional, false));
     }
-    // peer deps are installed (upm behavior); optional peers linked only if present — MVP installs them.
+    // peer deps are installed; optional peers linked only if present.
     for (dep, range) in &manifest.peer_dependencies {
         if !dependencies.contains_key(dep) {
             dependencies.insert(dep.clone(), range.clone());

@@ -1,5 +1,4 @@
 //! Shared registry shapes: packuments, manifests, dist.
-//! Port of `upm`'s `src/types.ts`.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

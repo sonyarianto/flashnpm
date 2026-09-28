@@ -1,5 +1,5 @@
-//! Error codes a caller can match on. Mirrors `upm`'s `ErrorCode`
-//! so scripts can handle failures without parsing messages.
+//! Error codes a caller can match on, so scripts can handle failures
+//! without parsing messages.
 
 use thiserror::Error;
 

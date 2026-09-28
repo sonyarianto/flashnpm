@@ -1,14 +1,13 @@
 //! flashnpm — Flash npm in idiomatic Rust.
 //!
-//! Library layout mirrors `upm`'s `src/*.ts` so behavior can be compared
-//! module by module:
+//! Modules:
 //!
 //! - [`spec`] / [`semver`] — spec parsing + npm range matching
 //! - [`integrity`] — SSRI subset
 //! - [`config`] — `.npmrc` hierarchy
 //! - [`registry`] — packument client + metadata cache
 //! - [`pick`] — version selection incl. release-age gate
-//! - [`resolve`] — dependency walk (no hoisting, like upm)
+//! - [`resolve`] — dependency walk (no hoisting)
 //! - [`lock`] — `flashnpm.lock` round-trip
 //! - [`store`] — content-addressed `~/.flashnpm/store`
 //! - [`tarball`] — `file:`/`https:` tarball deps
@@ -16,8 +15,8 @@
 //! - [`state`] — install-state fast path
 //! - [`api`] — commands as functions (no printing)
 //! - [`cli`] — argv parsing + output formatting
-//! - [`run`] — script running (`run.ts`)
-//! - [`exec`] — bin lookup for exec (`exec.ts`)
+//! - [`run`] — script running
+//! - [`exec`] — bin lookup for exec
 
 pub mod api;
 pub mod cli;

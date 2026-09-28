@@ -2,7 +2,7 @@
 name = "flashnpm"
 version = "0.1.0"
 edition = "2021"
-description = "Flash npm — a fast, tiny npm-registry package manager in idiomatic Rust (inspired by upm)"
+description = "Flash npm — a fast, tiny npm-registry package manager in idiomatic Rust"
 license = "MIT"
 repository = "https://github.com/sonyarianto/flashnpm.git"
 keywords = ["npm", "package-manager", "registry"]

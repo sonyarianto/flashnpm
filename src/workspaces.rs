@@ -1,5 +1,5 @@
 //! Which directories are workspaces of a root, and which root a directory
-//! belongs to. Port of `upm`'s `src/workspaces.ts`.
+//! belongs to.
 //!
 //! A workspace is a leaf, never a store entry: its identity is
 //! `name@link:<path>`, linked from its directory, never in `.flashnpm`.
@@ -340,7 +340,7 @@ fn match_segments(pat: &[&str], path: &[&str]) -> bool {
 }
 
 fn match_segment(pat: &str, seg: &str) -> bool {
-    let (p, mut s) = (pat.as_bytes(), seg.as_bytes());
+    let (p, s) = (pat.as_bytes(), seg.as_bytes());
     let (mut px, mut sx) = (0, 0);
     let (mut star, mut mark) = (None, 0);
     while sx < s.len() {
