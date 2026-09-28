@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use futures::stream::{StreamExt as _, TryStreamExt as _};
+
 use crate::error::{FlashnpmError, ErrorCode};
 use crate::resolve::ResolvedPackage;
 use crate::store::Store;
@@ -76,7 +78,6 @@ pub async fn link_tree(
         .map_err(|e| fail(format!("cannot create {}: {e}", dot.display())))?;
 
     let mut files_linked: u64 = 0;
-    let mut linked = 0;
     // name -> candidate packages, versions descending (built once; edge
     // resolution below is a scan, no syscalls until the link itself).
     let mut by_name: HashMap<&str, Vec<&ResolvedPackage>> = HashMap::new();
@@ -94,20 +95,24 @@ pub async fn link_tree(
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
     }
-    for pkg in packages.values() {
-        // Workspace leaves are directories, not store entries.
-        if pkg.local.is_some() {
-            continue;
-        }
-        if !crate::resolve::runs_on(pkg) {
-            continue;
-        }
-        let entry = entry_dir(&dot, pkg);
-        link_package(&entry, pkg, store).await?;
-        link_isolation(&entry, pkg, packages, &by_name, &dot, workspaces)?;
-        files_linked += 1;
-        linked += 1;
-    }
+    // Entries are independent directories: link them concurrently.
+    // (Root links, sweep and bins below must still run after all entries.)
+    let todo: Vec<&ResolvedPackage> = packages
+        .values()
+        .filter(|p| p.local.is_none() && crate::resolve::runs_on(p))
+        .collect();
+    let linked_entries: Vec<()> = futures::stream::iter(todo)
+        .map(|pkg| async {
+            let entry = entry_dir(&dot, pkg);
+            link_package(&entry, pkg, store).await?;
+            link_isolation(&entry, pkg, packages, &by_name, &dot, workspaces)?;
+            Ok::<(), FlashnpmError>(())
+        })
+        .buffer_unordered(32)
+        .try_collect()
+        .await?;
+    let linked = linked_entries.len();
+    files_linked += linked as u64;
     // The root sees its direct deps resolved to single winners — never two
     // versions of one name.
     link_root_deps(&modules, root, packages, &by_name, &dot, workspaces)?;

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use futures::stream::StreamExt as _;
+use futures::stream::{FuturesUnordered, StreamExt as _};
 
 use crate::error::{FlashnpmError, ErrorCode};
 use crate::pick::{excluded, pick_manifest, PickOptions};
@@ -212,255 +212,122 @@ pub async fn resolve_tree(
     }
 
     let mut seen: HashSet<String> = HashSet::new();
-    // Round-based BFS: each frontier's packuments fetch concurrently
-    // (bounded), then edges process in pop order — the same picks as the
-    // sequential walk, since picking is pure per spec+document.
-    while !queue.is_empty() {
-        let frontier: Vec<(String, String, bool, bool)> =
-            std::mem::take(&mut queue).into_iter().rev().collect();
-        let parsed: Vec<Result<crate::spec::Spec, FlashnpmError>> = frontier
-            .iter()
-            .map(|(name, range, _, _)| parse_dep(name, range, None))
-            .collect();
-        // Plan packument fetches: unique (registry, name) keys this round.
-        let mut planned: HashSet<String> = HashSet::new();
-        let mut tasks = Vec::new();
-        for (i, (name, range, _, from_top)) in frontier.iter().enumerate() {
-            let Ok(spec) = &parsed[i] else { continue };
+    // Packuments fetched once per resolve and shared across edges: picking
+    // is pure per spec+document, and lock output is sorted, so processing
+    // order doesn't affect the resolution.
+    let mut doc_cache: HashMap<String, crate::types::Packument> = HashMap::new();
+    let mut doc_err: HashMap<String, (ErrorCode, String)> = HashMap::new();
+    let mut inflight: FuturesUnordered<_> = FuturesUnordered::new();
+    let mut inflight_keys: HashSet<String> = HashSet::new();
+    // Pipelined walk: packument fetches launch as soon as their edge is
+    // queued (bounded), and edges process in pop order as soon as their
+    // document is ready — no round barriers.
+    // Tunable for the network at hand: FLASHNPM_FETCH_LIMIT (default 32).
+    let fetch_limit: usize = std::env::var("FLASHNPM_FETCH_LIMIT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(32);
+    let t0 = std::time::Instant::now();
+    let mut fetch_ms: Vec<u128> = Vec::new();
+    loop {
+        // Launch: scan back-to-front (pop order) for docs we still need.
+        for (name, range, _, from_top) in queue.iter().rev() {
+            if inflight_keys.len() >= fetch_limit {
+                break;
+            }
+            let Ok(spec) = parse_dep(name, range, None) else {
+                continue;
+            };
             // Terminal without registry IO.
             if *from_top && workspace_edge(name, range, &by_name).is_some() {
                 continue;
             }
-            if matches!(spec.spec_type, SpecType::Tarball) {
+            if matches!(spec.spec_type, SpecType::Tarball | SpecType::Workspace) {
                 continue;
-            }
-            if matches!(spec.spec_type, SpecType::Workspace) {
-                continue; // errors at processing, in order
             }
             let reg = registry.registry_for(spec.scope.as_deref());
             let key = format!("{reg}|{}", spec.escaped_name);
-            if planned.insert(key.clone()) {
-                let (fetch_name, escaped, scope) = (
-                    spec.fetch_name.clone(),
-                    spec.escaped_name.clone(),
-                    spec.scope.clone(),
-                );
-                let reg_ref = registry.clone();
-                tasks.push(async move {
-                    let doc = reg_ref
-                        .packument(&fetch_name, &escaped, scope.as_deref())
-                        .await;
-                    (key, doc)
-                });
-            }
-        }
-        // Bounded concurrency; results map consumed below in pop order.
-        let fetched: Vec<(String, Result<crate::types::Packument, FlashnpmError>)> =
-            futures::stream::iter(tasks)
-                .buffer_unordered(16)
-                .collect()
-                .await;
-        let mut docs: HashMap<String, Result<crate::types::Packument, FlashnpmError>> =
-            HashMap::with_capacity(fetched.len());
-        for (key, doc) in fetched {
-            docs.insert(key, doc);
-        }
-        for (i, (name, range, via_optional, from_top)) in frontier.into_iter().enumerate() {
-            let spec = parsed[i]
-                .as_ref()
-                .map_err(|e| FlashnpmError::new(e.code, e.message.clone()))?;
-            // A workspace edge from a top never touches the registry.
-            if from_top {
-                if let Some(ws) = workspace_edge(&name, &range, &by_name) {
-                    let key = workspace_key(&ws.name, &ws.path);
-                    if seen.insert(key) {
-                        // already inserted above; nothing to fetch
-                    }
-                    continue;
-                }
-                if matches!(spec.spec_type, SpecType::Workspace) {
-                    return Err(fail(
-                        ErrorCode::Eworkspace,
-                        format!("workspace {name} not found (at {range})"),
-                    ));
-                }
-            } else if matches!(spec.spec_type, SpecType::Workspace | SpecType::Tarball)
-                && !(spec.spec_type == SpecType::Tarball && is_url_spec(&spec))
+            if doc_cache.contains_key(&key)
+                || doc_err.contains_key(&key)
+                || !inflight_keys.insert(key.clone())
             {
-                // Registry manifests never link workspaces or read local tarballs.
-                if matches!(spec.spec_type, SpecType::Workspace) {
-                    return Err(fail(
-                        ErrorCode::Eworkspace,
-                        format!("only the root and workspaces can link to a workspace: {name}"),
-                    ));
-                }
-                return Err(fail(
-                    ErrorCode::Eoption,
-                    format!("only the root and workspaces can use a tarball path: {name}"),
-                ));
-            }
-            if matches!(spec.spec_type, SpecType::Workspace) {
-                // Non-top workspace specs are refused above; a top one that names
-                // nothing is an error (the found ones returned early).
-                return Err(fail(
-                    ErrorCode::Eworkspace,
-                    format!("workspace {name} not found (at {range})"),
-                ));
-            }
-            if matches!(spec.spec_type, SpecType::Tarball) {
-                let source = crate::spec::tarball_source(&spec.fetch_spec, "");
-                let key = crate::tarball::key_of(&spec.name, &source);
-                if !seen.insert(key.clone()) {
-                    continue;
-                }
-                // Pinned bytes win (lock reuse passes them via `keep` as name@source);
-                // otherwise read the source now.
-                let bytes = crate::tarball::read_bytes(&source, root_dir, registry).await?;
-                let integrity = crate::integrity::hash_sha512(&bytes);
-                if let Some(kept) = opts.keep.get(&spec.name) {
-                    // `keep` holds `version` for registry keys and full keys for tarballs.
-                    if kept != &key && kept != &integrity {
-                        // stale pin ignored: fresh bytes decide below
-                    }
-                }
-                let inner = crate::tarball::inner_manifest(&bytes, &source)?;
-                // Adopt into the store under the tarball index path now, so fill()
-                // never needs the project dir later.
-                let pkg = ResolvedPackage {
-                    name: spec.name.clone(),
-                    version: inner.version.clone(),
-                    resolved: source.clone(),
-                    integrity: integrity.clone(),
-                    source: Some(source.clone()),
-                    local: None,
-                    dependencies: inner
-                        .dependencies
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect(),
-                    optional_dependencies: if inner.optional_dependencies.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            inner
-                                .optional_dependencies
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect(),
-                        )
-                    },
-                    optional: via_optional,
-                    dev: dev_reachable.contains(&spec.name),
-                    bin: inner.bin.clone(),
-                    os: inner.os.clone(),
-                    cpu: inner.cpu.clone(),
-                    libc: inner.libc.clone(),
-                    peer_dependencies: if inner.peer_dependencies.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            inner
-                                .peer_dependencies
-                                .iter()
-                                .map(|(k, v)| (k.clone(), v.clone()))
-                                .collect(),
-                        )
-                    },
-                };
-                store.adopt_pkg(&pkg, &bytes).await?;
-                for (dep, r) in &pkg.dependencies {
-                    queue.push((dep.clone(), r.clone(), via_optional, false));
-                }
-                if let Some(opt) = &pkg.optional_dependencies {
-                    for (dep, r) in opt {
-                        queue.push((dep.clone(), r.clone(), true, false));
-                    }
-                }
-                packages.insert(key, pkg);
                 continue;
             }
-            // Stability: reuse locked version when it still satisfies the range.
-            if let Some(kept) = opts.keep.get(&name) {
-                if crate::semver::satisfies_str(kept, &spec.fetch_spec, false) {
-                    if packages.contains_key(&key_of(&name, kept)) {
-                        continue;
-                    }
-                    // resolve the kept version's own deps from the registry below
-                    let reg = registry.registry_for(spec.scope.as_deref());
-                    let doc_key = format!("{reg}|{}", spec.escaped_name);
-                    let doc = match docs.remove(&doc_key) {
-                        Some(Ok(doc)) => doc,
-                        Some(Err(e)) => return Err(e),
-                        None => {
-                            return Err(fail(
-                                ErrorCode::Eregistry,
-                                format!("missing packument for {}", spec.fetch_name),
-                            ));
-                        }
-                    };
-                    let manifest = doc.versions.get(kept).ok_or_else(|| {
-                        fail(
-                            ErrorCode::Etarget,
-                            format!("kept {name}@{kept} not in registry"),
-                        )
-                    })?;
-                    insert_package(
-                        &mut packages,
-                        &mut queue,
-                        spec,
-                        manifest,
-                        via_optional,
-                        &dev_reachable,
-                        opts,
-                    )?;
-                    // Put the doc back: another edge may share this round's fetch.
-                    docs.insert(doc_key, Ok(doc));
-                    continue;
-                }
-            }
-
-            let reg = registry.registry_for(spec.scope.as_deref());
-            let doc_key = format!("{reg}|{}", spec.escaped_name);
-            let doc = match docs.remove(&doc_key) {
-                Some(Ok(doc)) => doc,
-                Some(Err(e)) => return Err(e),
-                None => {
-                    return Err(fail(
-                        ErrorCode::Eregistry,
-                        format!("missing packument for {}", spec.fetch_name),
-                    ));
-                }
+            let (fetch_name, escaped, scope) = (
+                spec.fetch_name.clone(),
+                spec.escaped_name.clone(),
+                spec.scope.clone(),
+            );
+            let reg_ref = registry.clone();
+            inflight.push(async move {
+                let doc = reg_ref
+                    .packument(&fetch_name, &escaped, scope.as_deref())
+                    .await;
+                (key, doc)
+            });
+        }
+        // Process every ready edge in pop order (children queue behind).
+        let mut progressed = false;
+        loop {
+            let ready = queue.iter().rposition(|(name, range, _, from_top)| {
+                edge_ready(name, range, *from_top, registry, &by_name, &doc_cache, &doc_err)
+            });
+            let Some(pos) = ready else {
+                break;
             };
-            let pick_opts = PickOptions {
-                before: opts.before,
-                exclude_from_age: excluded(&spec.fetch_name, &opts.release_age_exclude),
-            };
-            let version = pick_manifest(&doc, spec, &pick_opts)?;
-            let key = key_of(&spec.fetch_name, &version);
-            if !seen.insert(key.clone()) {
-                docs.insert(doc_key, Ok(doc));
-                continue;
-            }
-            let manifest = doc.versions.get(&version).ok_or_else(|| {
-                fail(
-                    ErrorCode::Etarget,
-                    format!("registry has no {}@{version}", spec.fetch_name),
-                )
-            })?;
-            insert_package(
+            let (name, range, via_optional, from_top) = queue.remove(pos);
+            process_edge(
+                (name, range, via_optional, from_top),
+                registry,
+                store,
+                root_dir,
+                &by_name,
                 &mut packages,
                 &mut queue,
-                spec,
-                manifest,
-                via_optional,
-                &dev_reachable,
+                &mut seen,
                 opts,
-            )?;
-            docs.insert(doc_key, Ok(doc));
+                &dev_reachable,
+                &doc_cache,
+                &doc_err,
+            )
+            .await?;
+            progressed = true;
+        }
+        if queue.is_empty() && inflight.is_empty() {
+            break;
+        }
+        if progressed {
+            // New children may need fetches; launch before waiting.
+            continue;
+        }
+        // Nothing ready: wait for the next fetch to unblock edges.
+        let Some((key, res)) = inflight.next().await else {
+            return Err(fail(
+                ErrorCode::Eregistry,
+                "resolve stalled with no fetches in flight",
+            ));
+        };
+        inflight_keys.remove(&key);
+        fetch_ms.push(t0.elapsed().as_millis());
+        match res {
+            Ok(doc) => {
+                doc_cache.insert(key, doc);
+            }
+            Err(e) => {
+                doc_err.insert(key, (e.code, e.message));
+            }
         }
     }
 
-    crate::profile::mark(&format!("resolve done ({} packages)", packages.len()));
+    crate::profile::mark(&format!(
+        "resolve done ({} packages, {} packuments, fetch p50/p90/max {}ms/{}ms/{}ms)",
+        packages.len(),
+        doc_cache.len(),
+        percentile(&fetch_ms, 50),
+        percentile(&fetch_ms, 90),
+        percentile(&fetch_ms, 100),
+    ));
     warnings.sort();
     Ok(Resolution {
         root,
@@ -468,6 +335,247 @@ pub async fn resolve_tree(
         warnings,
         workspaces: workspaces.to_vec(),
     })
+}
+
+fn percentile(sorted_ms: &[u128], pct: u128) -> u128 {
+    if sorted_ms.is_empty() {
+        return 0;
+    }
+    let mut v = sorted_ms.to_vec();
+    v.sort_unstable();
+    v[((pct * v.len() as u128).saturating_sub(1) / 100).min(v.len() as u128 - 1) as usize]
+}
+
+/// A queued edge needs no fetch (terminal), fails fast on parse errors when
+/// processed, or waits on its packument otherwise.
+fn edge_ready(
+    name: &str,
+    range: &str,
+    from_top: bool,
+    registry: &Registry,
+    by_name: &HashMap<&str, &crate::workspaces::Workspace>,
+    doc_cache: &HashMap<String, crate::types::Packument>,
+    doc_err: &HashMap<String, (ErrorCode, String)>,
+) -> bool {
+    let Ok(spec) = parse_dep(name, range, None) else {
+        return true; // processing reports the parse error
+    };
+    if from_top && workspace_edge(name, range, by_name).is_some() {
+        return true;
+    }
+    if matches!(spec.spec_type, SpecType::Tarball | SpecType::Workspace) {
+        return true;
+    }
+    let reg = registry.registry_for(spec.scope.as_deref());
+    let key = format!("{reg}|{}", spec.escaped_name);
+    doc_cache.contains_key(&key) || doc_err.contains_key(&key)
+}
+
+fn cached_doc<'a>(
+    doc_cache: &'a HashMap<String, crate::types::Packument>,
+    doc_err: &'a HashMap<String, (ErrorCode, String)>,
+    doc_key: &str,
+    fetch_name: &str,
+) -> Result<&'a crate::types::Packument, FlashnpmError> {
+    if let Some(doc) = doc_cache.get(doc_key) {
+        return Ok(doc);
+    }
+    if let Some((code, message)) = doc_err.get(doc_key) {
+        return Err(FlashnpmError::new(*code, message.clone()));
+    }
+    Err(fail(
+        ErrorCode::Eregistry,
+        format!("missing packument for {fetch_name}"),
+    ))
+}
+
+/// Process one queued edge: pick a version from its packument (or handle
+/// workspace/tarball edges) and queue the children. Picks are pure per
+/// spec+document, so call order doesn't affect the resolution.
+#[allow(clippy::too_many_arguments)]
+async fn process_edge(
+    edge: (String, String, bool, bool),
+    registry: &Registry,
+    store: &crate::store::Store,
+    root_dir: &Path,
+    by_name: &HashMap<&str, &crate::workspaces::Workspace>,
+    packages: &mut HashMap<String, ResolvedPackage>,
+    queue: &mut Vec<(String, String, bool, bool)>,
+    seen: &mut HashSet<String>,
+    opts: &ResolveOptions,
+    dev_reachable: &HashSet<String>,
+    doc_cache: &HashMap<String, crate::types::Packument>,
+    doc_err: &HashMap<String, (ErrorCode, String)>,
+) -> Result<(), FlashnpmError> {
+    let (name, range, via_optional, from_top) = edge;
+    let spec = parse_dep(&name, &range, None)?;
+    // A workspace edge from a top never touches the registry.
+    if from_top {
+        if let Some(ws) = workspace_edge(&name, &range, by_name) {
+            let key = workspace_key(&ws.name, &ws.path);
+            if seen.insert(key) {
+                // already inserted above; nothing to fetch
+            }
+            return Ok(());
+        }
+        if matches!(spec.spec_type, SpecType::Workspace) {
+            return Err(fail(
+                ErrorCode::Eworkspace,
+                format!("workspace {name} not found (at {range})"),
+            ));
+        }
+    } else if matches!(spec.spec_type, SpecType::Workspace | SpecType::Tarball)
+        && !(spec.spec_type == SpecType::Tarball && is_url_spec(&spec))
+    {
+        // Registry manifests never link workspaces or read local tarballs.
+        if matches!(spec.spec_type, SpecType::Workspace) {
+            return Err(fail(
+                ErrorCode::Eworkspace,
+                format!("only the root and workspaces can link to a workspace: {name}"),
+            ));
+        }
+        return Err(fail(
+            ErrorCode::Eoption,
+            format!("only the root and workspaces can use a tarball path: {name}"),
+        ));
+    }
+    if matches!(spec.spec_type, SpecType::Workspace) {
+        // Non-top workspace specs are refused above; a top one that names
+        // nothing is an error (the found ones returned early).
+        return Err(fail(
+            ErrorCode::Eworkspace,
+            format!("workspace {name} not found (at {range})"),
+        ));
+    }
+    if matches!(spec.spec_type, SpecType::Tarball) {
+        let source = crate::spec::tarball_source(&spec.fetch_spec, "");
+        let key = crate::tarball::key_of(&spec.name, &source);
+        if !seen.insert(key.clone()) {
+            return Ok(());
+        }
+        // Pinned bytes win (lock reuse passes them via `keep` as name@source);
+        // otherwise read the source now.
+        let bytes = crate::tarball::read_bytes(&source, root_dir, registry).await?;
+        let integrity = crate::integrity::hash_sha512(&bytes);
+        if let Some(kept) = opts.keep.get(&spec.name) {
+            // `keep` holds `version` for registry keys and full keys for tarballs.
+            if kept != &key && kept != &integrity {
+                // stale pin ignored: fresh bytes decide below
+            }
+        }
+        let inner = crate::tarball::inner_manifest(&bytes, &source)?;
+        // Adopt into the store under the tarball index path now, so fill()
+        // never needs the project dir later.
+        let pkg = ResolvedPackage {
+            name: spec.name.clone(),
+            version: inner.version.clone(),
+            resolved: source.clone(),
+            integrity: integrity.clone(),
+            source: Some(source.clone()),
+            local: None,
+            dependencies: inner
+                .dependencies
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            optional_dependencies: if inner.optional_dependencies.is_empty() {
+                None
+            } else {
+                Some(
+                    inner
+                        .optional_dependencies
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                )
+            },
+            optional: via_optional,
+            dev: dev_reachable.contains(&spec.name),
+            bin: inner.bin.clone(),
+            os: inner.os.clone(),
+            cpu: inner.cpu.clone(),
+            libc: inner.libc.clone(),
+            peer_dependencies: if inner.peer_dependencies.is_empty() {
+                None
+            } else {
+                Some(
+                    inner
+                        .peer_dependencies
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.clone()))
+                        .collect(),
+                )
+            },
+        };
+        store.adopt_pkg(&pkg, &bytes).await?;
+        for (dep, r) in &pkg.dependencies {
+            queue.push((dep.clone(), r.clone(), via_optional, false));
+        }
+        if let Some(opt) = &pkg.optional_dependencies {
+            for (dep, r) in opt {
+                queue.push((dep.clone(), r.clone(), true, false));
+            }
+        }
+        packages.insert(key, pkg);
+        return Ok(());
+    }
+    // Stability: reuse locked version when it still satisfies the range.
+    if let Some(kept) = opts.keep.get(&name) {
+        if crate::semver::satisfies_str(kept, &spec.fetch_spec, false) {
+            if packages.contains_key(&key_of(&name, kept)) {
+                return Ok(());
+            }
+            // resolve the kept version's own deps from the registry below
+            let reg = registry.registry_for(spec.scope.as_deref());
+            let doc_key = format!("{reg}|{}", spec.escaped_name);
+            let doc = cached_doc(doc_cache, doc_err, &doc_key, &spec.fetch_name)?;
+            let manifest = doc.versions.get(kept).ok_or_else(|| {
+                fail(
+                    ErrorCode::Etarget,
+                    format!("kept {name}@{kept} not in registry"),
+                )
+            })?;
+            insert_package(
+                packages,
+                queue,
+                &spec,
+                manifest,
+                via_optional,
+                dev_reachable,
+                opts,
+            )?;
+            return Ok(());
+        }
+    }
+
+    let reg = registry.registry_for(spec.scope.as_deref());
+    let doc_key = format!("{reg}|{}", spec.escaped_name);
+    let doc = cached_doc(doc_cache, doc_err, &doc_key, &spec.fetch_name)?;
+    let pick_opts = PickOptions {
+        before: opts.before,
+        exclude_from_age: excluded(&spec.fetch_name, &opts.release_age_exclude),
+    };
+    let version = pick_manifest(doc, &spec, &pick_opts)?;
+    let key = key_of(&spec.fetch_name, &version);
+    if !seen.insert(key.clone()) {
+        return Ok(());
+    }
+    let manifest = doc.versions.get(&version).ok_or_else(|| {
+        fail(
+            ErrorCode::Etarget,
+            format!("registry has no {}@{version}", spec.fetch_name),
+        )
+    })?;
+    insert_package(
+        packages,
+        queue,
+        &spec,
+        manifest,
+        via_optional,
+        dev_reachable,
+        opts,
+    )?;
+    Ok(())
 }
 
 /// A top's edge that resolves to a workspace: `workspace:` ranges always do;

@@ -99,7 +99,7 @@ impl Store {
     ) -> Result<usize, FlashnpmError> {
         let mut fetched = 0;
         // bound concurrency; downloads are the bottleneck, not CPU
-        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
+        let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(32));
         let mut jobs = Vec::new();
         for pkg in packages {
             // Workspace leaves are directories, never store entries.
@@ -201,15 +201,38 @@ impl Store {
                         .await
                         .map_err(|e| fail(format!("cannot create files dir: {e}")))?;
                 }
-                tokio::fs::write(&blob, data)
+                // create_new: same content ⇒ same path, so AlreadyExists means
+                // another task won the race with identical bytes — skip.
+                match tokio::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&blob)
                     .await
-                    .map_err(|e| fail(format!("cannot write blob for {path}: {e}")))?;
-                #[cfg(unix)]
                 {
-                    use std::os::unix::fs::PermissionsExt as _;
-                    let _ =
-                        tokio::fs::set_permissions(&blob, std::fs::Permissions::from_mode(0o444))
+                    Ok(mut f) => {
+                        use tokio::io::AsyncWriteExt as _;
+                        f.write_all(data)
+                            .await
+                            .map_err(|e| fail(format!("cannot write blob for {path}: {e}")))?;
+                        drop(f);
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt as _;
+                            let _ = tokio::fs::set_permissions(
+                                &blob,
+                                std::fs::Permissions::from_mode(0o444),
+                            )
                             .await;
+                        }
+                    }
+                    Err(e)
+                        if e.kind() == std::io::ErrorKind::AlreadyExists =>
+                    {
+                        // Lost the race; content-addressing guarantees bytes match.
+                    }
+                    Err(e) => {
+                        return Err(fail(format!("cannot write blob for {path}: {e}")));
+                    }
                 }
             }
         }

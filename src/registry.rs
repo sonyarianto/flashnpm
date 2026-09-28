@@ -54,6 +54,9 @@ impl Registry {
         let client = reqwest::Client::builder()
             .user_agent(format!("flashnpm/{}", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(64)
+            .http2_adaptive_window(true)
+            .tcp_nodelay(true)
             .build()
             .map_err(|e| {
                 fail(
@@ -91,6 +94,22 @@ impl Registry {
         escaped_name: &str,
         scope: Option<&str>,
     ) -> Result<Packument, FlashnpmError> {
+        // Slow-fetch diagnostics: only visible with FLASHNPM_PROFILE=1.
+        let f0 = std::time::Instant::now();
+        let out = self.packument_inner(name, escaped_name, scope).await;
+        let ms = f0.elapsed().as_millis();
+        if ms > 400 {
+            crate::profile::mark(&format!("slow packument {name} {ms}ms"));
+        }
+        out
+    }
+
+    async fn packument_inner(
+        &self,
+        name: &str,
+        escaped_name: &str,
+        scope: Option<&str>,
+    ) -> Result<Packument, FlashnpmError> {
         if self.config.offline {
             return self.cached(escaped_name, scope, true).await;
         }
@@ -110,10 +129,13 @@ impl Registry {
         }
 
         let etag = self.cached_etag(&registry, escaped_name).await;
-        let mut req = self.client.get(&url).header(
-            "Accept",
-            "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8",
-        );
+        // Plain JSON, not the abbreviated manifest: the registry computes
+        // the abbreviated view on the fly, which is an order of magnitude
+        // slower than serving the full document for large packuments.
+        let mut req = self
+            .client
+            .get(&url)
+            .header("Accept", "application/json");
         if let Some(auth) = crate::config::auth_header_for(&self.config.auth, &url) {
             req = req.header("Authorization", auth);
         }

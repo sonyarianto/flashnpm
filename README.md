@@ -36,13 +36,15 @@ Verified live against `registry.npmjs.org`:
 - `FLASHNPM_PROFILE=1`: `PHASE <label> <ms>` stderr marks for profiling installs
 - `bench/bench.sh`: cold/warm/repeat harness with private stores
 
-Performance (profiled cold `express@^4`, 71 packages): resolve dominated at
-~4.5s of 5.6s (sequential packument RTTs), so each frontier's packuments now
-fetch concurrently (16-wide) and edges process in pop order — resolve 4.6s →
-1.7s with byte-identical lockfiles. Warm/repeat untouched (state fast path).
-Lock output is deterministic under HashMap iteration order (root edges resolve
-per declared range; 15/15 repeat installs byte-stable) — verified after catching
-one nondeterministic root-edge bug with repeated runs.
+Performance (profiled cold `express@^4`, 71 packages, release build):
+packument fetches are pipelined (no round barriers, 32-wide by default via
+`FLASHNPM_FETCH_LIMIT`), plain full JSON (the registry's abbreviated view is
+flaky-slow on large packuments), one packument fetch per package shared across
+edges, tarball downloads 32-wide, and entries link concurrently — cold ~0.9s
+with byte-identical lockfiles across runs. Warm/repeat untouched (state fast
+path). Lock output is deterministic (sorted output; 15/15 repeat installs
+byte-stable) — verified after catching one nondeterministic root-edge bug
+with repeated runs.
 
 Scope (documented, not accidental):
 
