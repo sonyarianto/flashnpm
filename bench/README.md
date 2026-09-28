@@ -7,9 +7,13 @@ snpm/yarn/pnpm when on `PATH`).
 ```sh
 ./bench.sh
 # FIXTURES="tiny small" REPEAT=3 ./bench.sh
+# FIXTURES="medium big" FLASHNPM_BIN=../target/release/flashnpm ./bench.sh
 # FLASHNPM_BIN=../target/release/flashnpm UPM_BIN=../../upm/upm SNPM_BIN=snpm YARN_BIN=yarn PNPM_BIN=pnpm ./bench.sh
 # MANAGERS="flashnpm npm upm snpm yarn pnpm" ./bench.sh
 ```
+
+Fixtures: `tiny` (1 dep), `small` (2 deps), `medium` (`express@^4`,
+~70 packages), `big` (`next@^16`, hundreds of packages).
 
 Rules:
 

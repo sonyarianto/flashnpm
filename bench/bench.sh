@@ -71,6 +71,8 @@ setup_fixture() {
   case "$name" in
     tiny)  echo '{"name":"tiny","version":"1.0.0","dependencies":{"nanoid":"^5"}}' > "$dir/package.json" ;;
     small) echo '{"name":"small","version":"1.0.0","dependencies":{"nanoid":"^5","is-odd":"^3"}}' > "$dir/package.json" ;;
+    medium) echo '{"name":"medium","version":"1.0.0","dependencies":{"express":"^4"}}' > "$dir/package.json" ;;
+    big) echo '{"name":"big","version":"1.0.0","dependencies":{"next":"^16"}}' > "$dir/package.json" ;;
   esac
 }
 
